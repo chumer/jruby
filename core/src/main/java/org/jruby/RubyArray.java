@@ -170,13 +170,13 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
 
     public static final RubyArray newArray(final Ruby runtime, final int len) {
         RubyArray array = new RubyArray(runtime, len);
-        Helpers.fillNil(array.values, 0, array.values.length, runtime);
+        Helpers.fillNil(array.values, 0, len, runtime);
         return array;
     }
 
     public static final RubyArray newArrayLight(final Ruby runtime, final int len) {
         RubyArray array = new RubyArray(runtime, len, false);
-        Helpers.fillNil(array.values, 0, array.values.length, runtime);
+        Helpers.fillNil(array.values, 0, len, runtime);
         return array;
     }
 
@@ -198,11 +198,11 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     }
 
     public static RubyArray newArray(Ruby runtime, IRubyObject obj) {
-        return new RubyArray(runtime, new IRubyObject[] { obj });
+        return new RubyArrayOneObject(runtime, obj);
     }
 
     public static RubyArray newArrayLight(Ruby runtime, IRubyObject obj) {
-        return new RubyArray(runtime, new IRubyObject[] { obj }, false);
+        return new RubyArrayOneObject(runtime, obj);
     }
 
     public static RubyArray newArrayLight(Ruby runtime, IRubyObject... objs) {
@@ -224,6 +224,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
      *
      */
     public static RubyArray newArray(Ruby runtime, IRubyObject[] args) {
+        if (args.length == 1) return new RubyArrayOneObject(runtime, args[0]);
         RubyArray arr = new RubyArray(runtime, new IRubyObject[args.length]);
         System.arraycopy(args, 0, arr.values, 0, args.length);
         arr.realLength = args.length;
@@ -253,6 +254,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     }
 
     public static RubyArray newArray(Ruby runtime, Collection<? extends IRubyObject> collection) {
+        if (collection.size() == 1) return new RubyArrayOneObject(runtime, collection.iterator().next());
         return new RubyArray(runtime, collection.toArray(new IRubyObject[collection.size()]));
     }
 
@@ -350,7 +352,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
         values = vals;
     }
 
-    private RubyArray(Ruby runtime, RubyClass klass, boolean objectSpace) {
+    protected RubyArray(Ruby runtime, RubyClass klass, boolean objectSpace) {
         super(runtime, klass, objectSpace);
     }
 
@@ -894,7 +896,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
         }
 
         if (rlen > 0) {
-            safeArrayCopy(rplArr.values, rplArr.begin, values, begin + (int) beg, rlen);
+            rplArr.copyInto(values, begin + (int) beg, rlen);
         }
     }
 
@@ -1030,21 +1032,20 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
 
         Ruby runtime = getRuntime();
         int elen = -1;
-        int end = begin + alen;
-        for (int i = begin; i < end; i++) {
-            tmp = elt(i - begin).convertToArray();
+        for (int i = 0; i < alen; i++) {
+            tmp = elt(i).convertToArray();
             if (elen < 0) {
                 elen = tmp.realLength;
-                result = new RubyArray(runtime, elen);
+                result = newArray(runtime, elen);
                 for (int j = 0; j < elen; j++) {
-                    result.store(j, new RubyArray(runtime, alen));
+                    result.store(j, newArray(runtime, alen));
                 }
             } else if (elen != tmp.realLength) {
                 throw runtime.newIndexError("element size differs (" + tmp.realLength
                         + " should be " + elen + ")");
             }
             for (int j = 0; j < elen; j++) {
-                ((RubyArray) result.elt(j)).store(i - begin, tmp.elt(j));
+                ((RubyArray) result.elt(j)).store(i, tmp.elt(j));
             }
         }
         return result;
@@ -1055,7 +1056,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
      */
     private final IRubyObject values_at(long olen, IRubyObject[] args) {
         unpack();
-        RubyArray result = new RubyArray(getRuntime(), args.length);
+        RubyArray result = newArray(getRuntime(), args.length);
 
         for (int i = 0; i < args.length; i++) {
             if (args[i] instanceof RubyFixnum) {
@@ -2283,7 +2284,9 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     public IRubyObject indexes(IRubyObject[] args) {
         getRuntime().getWarnings().warn(ID.DEPRECATED_METHOD, "Array#indexes is deprecated; use Array#values_at");
 
-        RubyArray ary = new RubyArray(getRuntime(), args.length);
+        if (args.length == 1) return newArray(getRuntime(), args[0]);
+
+        RubyArray ary = newArray(getRuntime(), args.length);
 
         for (int i = 0; i < args.length; i++) {
             ary.append(aref(args[i]));
@@ -2353,7 +2356,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
      */
     public IRubyObject collect(ThreadContext context, Block block) {
         final Ruby runtime = context.runtime;
-        if (!block.isGiven()) return new RubyArray(runtime, runtime.getArray(), this);
+        if (!block.isGiven()) return makeShared();
 
         IRubyObject[] arr = new IRubyObject[realLength];
 
@@ -2365,7 +2368,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
         }
 
         // use iteration count as new size in case something was deleted along the way
-        return new RubyArray(runtime, arr, 0, i);
+        return newArrayNoCopy(runtime, arr, 0, i);
     }
 
     @JRubyMethod(name = {"collect"})
@@ -2415,7 +2418,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
      */
     public IRubyObject selectCommon(ThreadContext context, Block block) {
         final Ruby runtime = context.runtime;
-        RubyArray result = new RubyArray(runtime, realLength);
+        RubyArray result = newArray(runtime, realLength);
 
         for (int i = 0; i < realLength; i++) {
             // Do not coarsen the "safe" check, since it will misinterpret AIOOBE from the yield
@@ -2886,7 +2889,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     protected boolean flatten(ThreadContext context, final int level, final RubyArray result) {
         unpack();
         final Ruby runtime = context.runtime;
-        RubyArray stack = new RubyArray(runtime, ARRAY_DEFAULT_SIZE, false);
+        RubyArray stack = newArrayLight(runtime, ARRAY_DEFAULT_SIZE);
         IdentityHashMap<Object, Object> memo = new IdentityHashMap<Object, Object>();
         RubyArray ary = this;
         memo.put(ary, NEVER);
@@ -3046,7 +3049,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     public IRubyObject op_plus(IRubyObject obj) {
         RubyArray y = obj.convertToArray();
         int len = realLength + y.realLength;
-        RubyArray z = new RubyArray(getRuntime(), len);
+        RubyArray z = newArray(getRuntime(), len);
         try {
             copyInto(z.values, 0);
             y.copyInto(z.values, realLength);
@@ -3207,7 +3210,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     @JRubyMethod(name = "-", required = 1)
     public IRubyObject op_diff(IRubyObject other) {
         RubyHash hash = other.convertToArray().makeHash();
-        RubyArray ary3 = new RubyArray(getRuntime(), ARRAY_DEFAULT_SIZE);
+        RubyArray ary3 = newArray(getRuntime());
 
         try {
             for (int i = 0; i < realLength; i++) {
@@ -3230,7 +3233,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     public IRubyObject op_and(IRubyObject other) {
         RubyArray ary2 = other.convertToArray();
         RubyHash hash = ary2.makeHash();
-        RubyArray ary3 = new RubyArray(getRuntime(), realLength < ary2.realLength ? realLength : ary2.realLength);
+        RubyArray ary3 = newArray(getRuntime(), realLength < ary2.realLength ? realLength : ary2.realLength);
 
         for (int i = 0; i < realLength; i++) {
             IRubyObject v = elt(i);
@@ -3250,7 +3253,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
         RubyArray ary2 = other.convertToArray();
         RubyHash set = makeHash(ary2);
 
-        RubyArray ary3 = new RubyArray(getRuntime(), realLength + ary2.realLength);
+        RubyArray ary3 = newArray(getRuntime(), realLength + ary2.realLength);
 
         for (int i = 0; i < realLength; i++) {
             IRubyObject v = elt(i);
@@ -3964,7 +3967,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
                 }
                 if (k >= l && (++k >= g))
                     ++k;
-                return new RubyArray(runtime, new IRubyObject[] { eltOk(i),
+                return newArrayNoCopy(runtime, new IRubyObject[] { eltOk(i),
                         eltOk(j), eltOk(k) });
             }
 
@@ -3988,7 +3991,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
                 IRubyObject[] result = new IRubyObject[n];
                 for (i = 0; i < n; i++)
                     result[i] = eltOk(idx[i]);
-                return new RubyArray(runtime, result);
+                return newArrayNoCopy(runtime, result);
             } else {
                 IRubyObject[] result = new IRubyObject[len];
                 System.arraycopy(values, begin, result, 0, len);
@@ -3998,7 +4001,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
                     result[j] = result[i];
                     result[i] = tmp;
                 }
-                RubyArray ary = new RubyArray(runtime, result);
+                RubyArray ary = newArrayNoCopy(runtime, result);
                 ary.realLength = n;
                 return ary;
             }
@@ -4322,6 +4325,15 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     public void copyInto(IRubyObject[] target, int start) {
         assert target.length - start >= realLength;
         safeArrayCopy(values, begin, target, start, realLength);
+    }
+
+    /**
+     * Copy the specified number of values contained in this array into the target array at the specified offset.
+     * It is expected that the target array is large enough to hold all necessary values.
+     */
+    public void copyInto(IRubyObject[] target, int start, int len) {
+        assert target.length - start >= len;
+        safeArrayCopy(values, begin, target, start, len);
     }
 
     // Satisfy java.util.List interface (for Java integration)
