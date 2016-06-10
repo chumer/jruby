@@ -36,7 +36,6 @@ import org.jruby.truffle.platform.posix.Sockets;
 import org.jruby.truffle.platform.posix.TrufflePosix;
 import org.jruby.truffle.stdlib.CoverageManager;
 import org.jruby.util.ByteList;
-
 import java.math.BigInteger;
 
 @TypeSystemReference(RubyTypes.class)
@@ -45,6 +44,7 @@ public abstract class RubyBaseNode extends Node {
 
     private static final int FLAG_NEWLINE = 0;
     private static final int FLAG_CALL = 1;
+    private static final int FLAG_ROOT = 2;
 
     @CompilationFinal private RubyContext context;
     @CompilationFinal private SourceSection sourceSection;
@@ -186,6 +186,10 @@ public abstract class RubyBaseNode extends Node {
         flags |= 1 << FLAG_CALL;
     }
 
+    public void unsafeSetIsRoot() {
+        flags |= 1 << FLAG_ROOT;
+    }
+
     private boolean isNewLine() {
         return ((flags >> FLAG_NEWLINE) & 1) == 1;
     }
@@ -195,7 +199,7 @@ public abstract class RubyBaseNode extends Node {
     }
 
     private boolean isRoot() {
-        return getParent() instanceof RubyRootNode;
+        return ((flags >> FLAG_ROOT) & 1) == 1;
     }
 
     @Override

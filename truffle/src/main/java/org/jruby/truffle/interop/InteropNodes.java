@@ -34,11 +34,11 @@ import org.jruby.truffle.Layouts;
 import org.jruby.truffle.builtins.CoreClass;
 import org.jruby.truffle.builtins.CoreMethod;
 import org.jruby.truffle.builtins.CoreMethodArrayArgumentsNode;
+import org.jruby.truffle.core.cast.NameToJavaStringNode;
 import org.jruby.truffle.core.rope.Rope;
 import org.jruby.truffle.core.string.StringCachingGuards;
 import org.jruby.truffle.core.string.StringOperations;
 import org.jruby.util.ByteList;
-
 import java.io.IOException;
 
 @CoreClass("Truffle::Interop")
@@ -63,6 +63,9 @@ public abstract class InteropNodes {
 
     @CoreMethod(names = "execute", isModuleFunction = true, needsSelf = false, required = 1, rest = true)
     public abstract static class ExecuteNode extends CoreMethodArrayArgumentsNode {
+
+        // NOTE (eregon, 30/05/2016): If you want to introduce automatic argument conversion here,
+        // look first at cext.rb #rb_define_method which wants no automatic conversion.
 
         @Specialization(
                 guards = "args.length == cachedArgsLength",
@@ -126,14 +129,14 @@ public abstract class InteropNodes {
                 Object[] args,
                 @Cached("args.length") int cachedArgsLength,
                 @Cached("createInvokeNode(cachedArgsLength)") Node invokeNode,
-                        @Cached("create()") ToJavaStringNode toJavaStringNode,
+                        @Cached("create()") NameToJavaStringNode toJavaStringNode,
                 @Cached("create()") BranchProfile exceptionProfile) {
             try {
                 return ForeignAccess.sendInvoke(
                         invokeNode,
                         frame,
                         receiver,
-                        toJavaStringNode.executeToJavaString(identifier),
+                        toJavaStringNode.executeToJavaString(frame, identifier),
                         args);
             } catch (UnsupportedTypeException
                     | ArityException
@@ -599,13 +602,25 @@ public abstract class InteropNodes {
             try {
                 return getContext().getEnv().parse(sourceObject);
             } catch (IOException e) {
-                CompilerDirectives.transferToInterpreter();
+                CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw new RuntimeException(e);
             }
         }
 
         protected int getCacheLimit() {
             return getContext().getOptions().EVAL_CACHE;
+        }
+
+    }
+
+    @CoreMethod(names = "to_java_string", isModuleFunction = true, needsSelf = false, required = 1)
+    public abstract static class InteropToJavaStringNode extends CoreMethodArrayArgumentsNode {
+
+        @Child NameToJavaStringNode toJavaStringNode = NameToJavaStringNode.create();
+
+        @Specialization
+        public Object toJavaString(VirtualFrame frame, Object value) {
+            return toJavaStringNode.executeToJavaString(frame, value);
         }
 
     }

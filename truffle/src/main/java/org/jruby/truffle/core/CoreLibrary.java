@@ -33,6 +33,7 @@ import org.jruby.truffle.RubyContext;
 import org.jruby.truffle.builtins.CoreMethodNodeManager;
 import org.jruby.truffle.core.array.ArrayNodes;
 import org.jruby.truffle.core.array.ArrayNodesFactory;
+import org.jruby.truffle.core.array.TruffleArrayNodesFactory;
 import org.jruby.truffle.core.basicobject.BasicObjectNodesFactory;
 import org.jruby.truffle.core.binding.BindingNodesFactory;
 import org.jruby.truffle.core.binding.TruffleBindingNodesFactory;
@@ -52,6 +53,7 @@ import org.jruby.truffle.core.method.MethodNodesFactory;
 import org.jruby.truffle.core.method.UnboundMethodNodesFactory;
 import org.jruby.truffle.core.module.ModuleNodes;
 import org.jruby.truffle.core.module.ModuleNodesFactory;
+import org.jruby.truffle.core.mutex.ConditionVariableNodesFactory;
 import org.jruby.truffle.core.mutex.MutexNodesFactory;
 import org.jruby.truffle.core.numeric.BignumNodesFactory;
 import org.jruby.truffle.core.numeric.FixnumNodesFactory;
@@ -92,8 +94,10 @@ import org.jruby.truffle.language.TruffleSafeNodesFactory;
 import org.jruby.truffle.language.backtrace.BacktraceFormatter;
 import org.jruby.truffle.language.control.RaiseException;
 import org.jruby.truffle.language.control.TruffleFatalException;
+import org.jruby.truffle.language.globals.GlobalVariableStorage;
 import org.jruby.truffle.language.globals.GlobalVariables;
 import org.jruby.truffle.language.loader.CodeLoader;
+import org.jruby.truffle.language.loader.SourceLoader;
 import org.jruby.truffle.language.methods.DeclarationContext;
 import org.jruby.truffle.language.methods.InternalMethod;
 import org.jruby.truffle.language.objects.FreezeNode;
@@ -112,11 +116,14 @@ import org.jruby.truffle.stdlib.psych.PsychEmitterNodesFactory;
 import org.jruby.truffle.stdlib.psych.PsychParserNodesFactory;
 import org.jruby.truffle.stdlib.psych.YAMLEncoding;
 import org.jruby.util.cli.OutputStrings;
-
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Future;
 
 public class CoreLibrary {
 
@@ -243,6 +250,9 @@ public class CoreLibrary {
 
     @CompilationFinal private InternalMethod basicObjectSendMethod;
 
+    @CompilationFinal private GlobalVariableStorage loadPathStorage;
+    @CompilationFinal private GlobalVariableStorage loadedFeaturesStorage;
+
     private static final Object systemObject = TruffleOptions.AOT ? null : JavaInterop.asTruffleObject(System.class);
 
     public String getCoreLoadPath() {
@@ -252,7 +262,7 @@ public class CoreLibrary {
             path = path.substring(0, path.length() - 1);
         }
 
-        if (path.startsWith("truffle:")) {
+        if (path.startsWith(SourceLoader.TRUFFLE_SCHEME)) {
             return path;
         }
 
@@ -492,6 +502,8 @@ public class CoreLibrary {
         bindingClass = defineClass("Binding");
         bindingFactory = Layouts.BINDING.createBindingShape(bindingClass, bindingClass);
         Layouts.CLASS.setInstanceFactoryUnsafe(bindingClass, bindingFactory);
+        final DynamicObject conditionVariableClass = defineClass("ConditionVariable");
+        Layouts.CLASS.setInstanceFactoryUnsafe(conditionVariableClass, Layouts.CONDITION_VARIABLE.createConditionVariableShape(conditionVariableClass, conditionVariableClass));
         dirClass = defineClass("Dir");
         Layouts.CLASS.setInstanceFactoryUnsafe(dirClass, Layouts.DIR.createDirShape(dirClass, dirClass));
         encodingClass = defineClass("Encoding");
@@ -585,6 +597,7 @@ public class CoreLibrary {
         defineModule(truffleModule, "Graal");
         defineModule(truffleModule, "Ropes");
         defineModule(truffleModule, "GC");
+        defineModule(truffleModule, "Array");
         final DynamicObject attachments = defineModule(truffleModule, "Attachments");
         defineModule(attachments, "Internal");
         defineModule(truffleModule, "Boot");
@@ -697,68 +710,87 @@ public class CoreLibrary {
         // Bring in core method nodes
         CoreMethodNodeManager coreMethodNodeManager = new CoreMethodNodeManager(context, node.getSingletonClassNode());
 
-        coreMethodNodeManager.addCoreMethodNodes(ArrayNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(BasicObjectNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(BindingNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(BignumNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ClassNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ExceptionNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(FalseClassNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(FiberNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(FixnumNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(FloatNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(HashNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(IntegerNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(KernelNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(MainNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(MatchDataNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(MathNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ModuleNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(MutexNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ObjectSpaceNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ProcessNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ProcNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(QueueNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(RangeNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(RegexpNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(SizedQueueNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(StringNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(SymbolNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ThreadNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TrueClassNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleGCNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleBootNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(AttachmentsInternalNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleGraalNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(EncodingNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(EncodingConverterNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(InteropNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(CExtNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(MethodNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(UnboundMethodNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ByteArrayNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TimeNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TrufflePosixNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(RubiniusTypeNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ThreadBacktraceLocationNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(DigestNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(BigDecimalNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(ObjSpaceNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(EtcNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(PsychParserNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(PsychEmitterNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(AtomicReferenceNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TracePointNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(CoverageNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleRopesNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleFixnumNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleSafeNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleSystemNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleKernelNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleProcessNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleDebugNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(TruffleBindingNodesFactory.getFactories());
-        coreMethodNodeManager.addCoreMethodNodes(BCryptNodesFactory.getFactories());
+        ForkJoinPool.commonPool().invokeAll(Arrays.asList(() -> {
+            coreMethodNodeManager.addCoreMethodNodes(ArrayNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(BasicObjectNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(BindingNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(BignumNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ClassNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ConditionVariableNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ExceptionNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(FalseClassNodesFactory.getFactories());
+            return null;
+        }, () -> {
+            coreMethodNodeManager.addCoreMethodNodes(FiberNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(FixnumNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(FloatNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(HashNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(IntegerNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(KernelNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(MainNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(MatchDataNodesFactory.getFactories());
+            return null;
+        }, () -> {
+            coreMethodNodeManager.addCoreMethodNodes(MathNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ModuleNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(MutexNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ObjectSpaceNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ProcessNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ProcNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(QueueNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(RangeNodesFactory.getFactories());
+            return null;
+        }, () -> {
+            coreMethodNodeManager.addCoreMethodNodes(RegexpNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(SizedQueueNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(StringNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(SymbolNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ThreadNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TrueClassNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleGCNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleBootNodesFactory.getFactories());
+            return null;
+        }, () -> {
+            coreMethodNodeManager.addCoreMethodNodes(AttachmentsInternalNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleGraalNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(EncodingNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(EncodingConverterNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(InteropNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(CExtNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(MethodNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(UnboundMethodNodesFactory.getFactories());
+            return null;
+        }, () -> {
+            coreMethodNodeManager.addCoreMethodNodes(ByteArrayNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TimeNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TrufflePosixNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(RubiniusTypeNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ThreadBacktraceLocationNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(DigestNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(BigDecimalNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(ObjSpaceNodesFactory.getFactories());
+            return null;
+        }, () -> {
+            coreMethodNodeManager.addCoreMethodNodes(EtcNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(PsychParserNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(PsychEmitterNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(AtomicReferenceNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TracePointNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(CoverageNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleRopesNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleFixnumNodesFactory.getFactories());
+            return null;
+        }, () -> {
+            coreMethodNodeManager.addCoreMethodNodes(TruffleSafeNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleSystemNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleKernelNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleProcessNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleDebugNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleBindingNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(TruffleArrayNodesFactory.getFactories());
+            coreMethodNodeManager.addCoreMethodNodes(BCryptNodesFactory.getFactories());
+            return null;
+        }));
 
         coreMethodNodeManager.allMethodInstalled();
 
@@ -769,10 +801,14 @@ public class CoreLibrary {
     private void initializeGlobalVariables() {
         GlobalVariables globals = globalVariables;
 
-        globals.put("$LOAD_PATH", Layouts.ARRAY.createArray(Layouts.CLASS.getInstanceFactory(arrayClass), null, 0));
-        globals.put("$LOADED_FEATURES", Layouts.ARRAY.createArray(Layouts.CLASS.getInstanceFactory(arrayClass), new Object[0], 0));
-        globals.put("$:", globals.getOrDefault("$LOAD_PATH", nilObject));
-        globals.put("$\"", globals.getOrDefault("$LOADED_FEATURES", nilObject));
+        loadPathStorage = globals.put("$LOAD_PATH",
+                Layouts.ARRAY.createArray(Layouts.CLASS.getInstanceFactory(arrayClass), null, 0));
+        globals.alias("$:", loadPathStorage);
+
+        loadedFeaturesStorage = globals.put("$LOADED_FEATURES",
+                Layouts.ARRAY.createArray(Layouts.CLASS.getInstanceFactory(arrayClass), null, 0));
+        globals.alias("$\"", loadedFeaturesStorage);
+
         globals.put("$,", nilObject);
         globals.put("$*", argv);
         globals.put("$0", StringOperations.createString(context, StringOperations.encodeRope(context.getJRubyRuntime().getInstanceConfig().displayedFileName(), UTF8Encoding.INSTANCE)));
@@ -889,13 +925,39 @@ public class CoreLibrary {
 
         try {
             Main.printTruffleTimeMetric("before-load-core");
-
             state = State.LOADING_RUBY_CORE;
+
+            @SuppressWarnings("unchecked")
+            final Future<RubyRootNode>[] coreFileFutures = new Future[coreFiles.length];
+
             try {
-                final RubyRootNode rootNode = context.getCodeLoader().parse(context.getSourceCache().getSource(getCoreLoadPath() + "/core.rb"), UTF8Encoding.INSTANCE, ParserContext.TOP_LEVEL, null, true, node);
-                final CodeLoader.DeferredCall deferredCall = context.getCodeLoader().prepareExecute(ParserContext.TOP_LEVEL, DeclarationContext.TOP_LEVEL, rootNode, null, context.getCoreLibrary().getMainObject());
-                deferredCall.callWithoutCallNode();
-            } catch (IOException e) {
+                for (int n = 0; n < coreFiles.length; n++) {
+                    final int finalN = n;
+
+                    coreFileFutures[n] = ForkJoinPool.commonPool().submit(() ->
+                            context.getCodeLoader().parse(
+                                    context.getSourceCache().getSource(getCoreLoadPath() + coreFiles[finalN]),
+                                    UTF8Encoding.INSTANCE, ParserContext.TOP_LEVEL, null, true, node)
+                    );
+
+                    if (!context.getOptions().CORE_PARALLEL_LOAD) {
+                        coreFileFutures[n].get();
+                    }
+                }
+
+                for (int n = 0; n < coreFiles.length; n++) {
+                    final RubyRootNode rootNode = coreFileFutures[n].get();
+
+                    final CodeLoader.DeferredCall deferredCall = context.getCodeLoader().prepareExecute(
+                            ParserContext.TOP_LEVEL,
+                            DeclarationContext.TOP_LEVEL,
+                            rootNode,
+                            null,
+                            context.getCoreLibrary().getMainObject());
+
+                    deferredCall.callWithoutCallNode();
+                }
+            } catch (InterruptedException | ExecutionException e) {
                 throw new RuntimeException(e);
             }
 
@@ -923,6 +985,7 @@ public class CoreLibrary {
 
             try {
                 Main.printTruffleTimeMetric("before-post-boot");
+
                 try {
                     final RubyRootNode rootNode = context.getCodeLoader().parse(context.getSourceCache().getSource(getCoreLoadPath() + "/core/post-boot.rb"), UTF8Encoding.INSTANCE, ParserContext.TOP_LEVEL, null, true, node);
                     final CodeLoader.DeferredCall deferredCall = context.getCodeLoader().prepareExecute(ParserContext.TOP_LEVEL, DeclarationContext.TOP_LEVEL, rootNode, null, context.getCoreLibrary().getMainObject());
@@ -1075,7 +1138,7 @@ public class CoreLibrary {
             return (double) value;
         }
 
-        CompilerDirectives.transferToInterpreter();
+        CompilerDirectives.transferToInterpreterAndInvalidate();
         throw new UnsupportedOperationException();
     }
 
@@ -1163,6 +1226,10 @@ public class CoreLibrary {
         return rangeClass;
     }
 
+    public DynamicObject getRationalClass() {
+        return rationalClass;
+    }
+
     public DynamicObject getRegexpClass() {
         return regexpClass;
     }
@@ -1200,11 +1267,11 @@ public class CoreLibrary {
     }
 
     public DynamicObject getLoadPath() {
-        return (DynamicObject) globalVariables.getOrDefault("$LOAD_PATH", context.getCoreLibrary().getNilObject());
+        return (DynamicObject) loadPathStorage.value;
     }
 
     public DynamicObject getLoadedFeatures() {
-        return (DynamicObject) globalVariables.getOrDefault("$LOADED_FEATURES", context.getCoreLibrary().getNilObject());
+        return (DynamicObject) loadedFeaturesStorage.value;
     }
 
     public DynamicObject getMainObject() {
@@ -1291,6 +1358,10 @@ public class CoreLibrary {
         return internalBufferClass;
     }
 
+    public boolean isInitializing() {
+        return state == State.INITIALIZING;
+    }
+
     public boolean isLoadingRubyCore() {
         return state == State.LOADING_RUBY_CORE;
     }
@@ -1358,5 +1429,95 @@ public class CoreLibrary {
     public DynamicObjectFactory getHandleFactory() {
         return handleFactory;
     }
+
+    private static final String[] coreFiles = {
+            "/core/pre.rb",
+            "/core/tuple.rb",
+            "/core/lookuptable.rb",
+            "/core/basic_object.rb",
+            "/core/mirror.rb",
+            "/core/bignum.rb",
+            "/core/channel.rb",
+            "/core/character.rb",
+            "/core/configuration.rb",
+            "/core/false.rb",
+            "/core/gc.rb",
+            "/core/nil.rb",
+            "/core/rubinius.rb",
+            "/core/stat.rb",
+            "/core/string.rb",
+            "/core/thread.rb",
+            "/core/true.rb",
+            "/core/type.rb",
+            "/core/weakref.rb",
+            "/core/library.rb",
+            "/core/truffle/ffi/ffi.rb",
+            "/core/truffle/ffi/pointer.rb",
+            "/core/truffle/ffi/ffi_file.rb",
+            "/core/truffle/ffi/ffi_struct.rb",
+            "/core/io.rb",
+            "/core/immediate.rb",
+            "/core/string_mirror.rb",
+            "/core/module.rb",
+            "/core/proc.rb",
+            "/core/enumerable_helper.rb",
+            "/core/enumerable.rb",
+            "/core/enumerator.rb",
+            "/core/argf.rb",
+            "/core/exception.rb",
+            "/core/undefined.rb",
+            "/core/hash.rb",
+            "/core/array.rb",
+            "/core/kernel.rb",
+            "/core/identity_map.rb",
+            "/core/comparable.rb",
+            "/core/numeric_mirror.rb",
+            "/core/numeric.rb",
+            "/core/truffle/ctype.rb",
+            "/core/integer.rb",
+            "/core/fixnum.rb",
+            "/core/lru_cache.rb",
+            "/core/regexp.rb",
+            "/core/encoding.rb",
+            "/core/env.rb",
+            "/core/errno.rb",
+            "/core/file.rb",
+            "/core/dir.rb",
+            "/core/dir_glob.rb",
+            "/core/file_test.rb",
+            "/core/float.rb",
+            "/core/marshal.rb",
+            "/core/object_space.rb",
+            "/core/range_mirror.rb",
+            "/core/range.rb",
+            "/core/struct.rb",
+            "/core/tms.rb",
+            "/core/process.rb",
+            "/core/process_mirror.rb",
+            "/core/random.rb",
+            "/core/signal.rb",
+            "/core/splitter.rb",
+            "/core/symbol.rb",
+            "/core/mutex.rb",
+            "/core/throw_catch.rb",
+            "/core/time.rb",
+            "/core/rational.rb",
+            "/core/rationalizer.rb",
+            "/core/complex.rb",
+            "/core/complexifier.rb",
+            "/core/class.rb",
+            "/core/binding.rb",
+            "/core/math.rb",
+            "/core/method.rb",
+            "/core/unbound_method.rb",
+            "/core/shims.rb",
+            "/core/truffle/attachments.rb",
+            "/core/truffle/debug.rb",
+            "/core/truffle/cext.rb",
+            "/core/truffle/interop.rb",
+            "/core/rbconfig.rb",
+            "/core/main.rb",
+            "/core/post.rb"
+    };
 
 }

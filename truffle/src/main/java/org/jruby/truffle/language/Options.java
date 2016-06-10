@@ -18,13 +18,13 @@ import static org.jruby.util.cli.Options.TRUFFLE_BACKTRACES_LIMIT;
 import static org.jruby.util.cli.Options.TRUFFLE_BACKTRACES_OMIT_UNUSED;
 import static org.jruby.util.cli.Options.TRUFFLE_BINDING_LOCAL_VARIABLE_CACHE;
 import static org.jruby.util.cli.Options.TRUFFLE_BIND_CACHE;
-import static org.jruby.util.cli.Options.TRUFFLE_CALL_FREQUENCY;
 import static org.jruby.util.cli.Options.TRUFFLE_CALL_GRAPH;
 import static org.jruby.util.cli.Options.TRUFFLE_CALL_GRAPH_WRITE;
 import static org.jruby.util.cli.Options.TRUFFLE_CLASS_CACHE;
 import static org.jruby.util.cli.Options.TRUFFLE_CONSTANT_CACHE;
 import static org.jruby.util.cli.Options.TRUFFLE_CORE_ALWAYS_CLONE;
 import static org.jruby.util.cli.Options.TRUFFLE_CORE_LOAD_PATH;
+import static org.jruby.util.cli.Options.TRUFFLE_CORE_PARALLEL_LOAD;
 import static org.jruby.util.cli.Options.TRUFFLE_COVERAGE_GLOBAL;
 import static org.jruby.util.cli.Options.TRUFFLE_DISPATCH_CACHE;
 import static org.jruby.util.cli.Options.TRUFFLE_ENCODING_COMPATIBLE_QUERY_CACHE;
@@ -91,6 +91,7 @@ public class Options {
     // Resources
 
     public final String CORE_LOAD_PATH = TRUFFLE_CORE_LOAD_PATH.load();
+    public final boolean CORE_PARALLEL_LOAD = TRUFFLE_CORE_PARALLEL_LOAD.load();
 
     // Data structures
 
@@ -152,7 +153,6 @@ public class Options {
     public final boolean BACKTRACES_INTERLEAVE_JAVA = TRUFFLE_BACKTRACES_INTERLEAVE_JAVA.load();
     public final int BACKTRACES_LIMIT = TRUFFLE_BACKTRACES_LIMIT.load();
     public final boolean BACKTRACES_OMIT_UNUSED = TRUFFLE_BACKTRACES_OMIT_UNUSED.load();
-    public final boolean CALL_FREQUENCY = TRUFFLE_CALL_FREQUENCY.load();
 
     // Call graph
 

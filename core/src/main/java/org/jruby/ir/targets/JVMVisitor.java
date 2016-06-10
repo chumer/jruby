@@ -983,6 +983,14 @@ public class JVMVisitor extends IRVisitor {
 
     @Override
     public void CallInstr(CallInstr callInstr) {
+        if (callInstr instanceof OneFixnumArgNoBlockCallInstr && MethodIndex.getFastFixnumOpsMethod(callInstr.getName()) != null) {
+            oneFixnumArgNoBlockCallInstr((OneFixnumArgNoBlockCallInstr) callInstr);
+            return;
+        } else if (callInstr instanceof OneFloatArgNoBlockCallInstr) {
+            oneFloatArgNoBlockCallInstr((OneFloatArgNoBlockCallInstr) callInstr);
+            return;
+        }
+
         // JIT does not support refinements yet
         if (callInstr.getCallSite() instanceof RefinedCachingCallSite) {
             throw new NotCompilableException("refinements are unsupported in JIT");
@@ -1496,12 +1504,7 @@ public class JVMVisitor extends IRVisitor {
         compileCallCommon(m, name, args, receiver, numArgs, closure, hasClosure, callType, null, noResultCallInstr.isPotentiallyRefined());
     }
 
-    @Override
-    public void OneFixnumArgNoBlockCallInstr(OneFixnumArgNoBlockCallInstr oneFixnumArgNoBlockCallInstr) {
-        if (MethodIndex.getFastFixnumOpsMethod(oneFixnumArgNoBlockCallInstr.getName()) == null) {
-            CallInstr(oneFixnumArgNoBlockCallInstr);
-            return;
-        }
+    public void oneFixnumArgNoBlockCallInstr(OneFixnumArgNoBlockCallInstr oneFixnumArgNoBlockCallInstr) {
         IRBytecodeAdapter m = jvmMethod();
         String name = oneFixnumArgNoBlockCallInstr.getName();
         long fixnum = oneFixnumArgNoBlockCallInstr.getFixnumArg();
@@ -1526,8 +1529,7 @@ public class JVMVisitor extends IRVisitor {
         }
     }
 
-    @Override
-    public void OneFloatArgNoBlockCallInstr(OneFloatArgNoBlockCallInstr oneFloatArgNoBlockCallInstr) {
+    public void oneFloatArgNoBlockCallInstr(OneFloatArgNoBlockCallInstr oneFloatArgNoBlockCallInstr) {
         if (MethodIndex.getFastFloatOpsMethod(oneFloatArgNoBlockCallInstr.getName()) == null) {
             CallInstr(oneFloatArgNoBlockCallInstr);
             return;
@@ -1554,11 +1556,6 @@ public class JVMVisitor extends IRVisitor {
             // still need to drop, since all dyncalls return something (FIXME)
             m.adapter.pop();
         }
-    }
-
-    @Override
-    public void OneOperandArgNoBlockCallInstr(OneOperandArgNoBlockCallInstr oneOperandArgNoBlockCallInstr) {
-        CallInstr(oneOperandArgNoBlockCallInstr);
     }
 
     @Override
@@ -2179,11 +2176,6 @@ public class JVMVisitor extends IRVisitor {
         }
 
         jvmStoreLocal(yieldinstr.getResult());
-    }
-
-    @Override
-    public void ZeroOperandArgNoBlockCallInstr(ZeroOperandArgNoBlockCallInstr zeroOperandArgNoBlockCallInstr) {
-        CallInstr(zeroOperandArgNoBlockCallInstr);
     }
 
     @Override

@@ -15,10 +15,12 @@
 
 require 'fileutils'
 require 'json'
+require 'timeout'
 
-GRAALVM_VERSION = "0.11"
+GRAALVM_VERSION = '0.12'
 
 JRUBY_DIR = File.expand_path('../..', __FILE__)
+M2_REPO = File.expand_path('~/.m2/repository')
 
 JDEBUG_PORT = 51819
 JDEBUG = "-J-agentlib:jdwp=transport=dt_socket,server=y,address=#{JDEBUG_PORT},suspend=y"
@@ -71,7 +73,7 @@ module Utilities
     searches = [
       "#{dir}/../jvmci/jdk*/product/bin/java",
       "#{dir}/../graal-core/mx.imports/binary/jvmci/jdk*/product/bin/java"
-    ]
+    ].map { |path| File.expand_path(path) }
 
     searches.each do |search|
       java = Dir[search].first
@@ -144,8 +146,13 @@ module Utilities
   end
 
   def self.find_gem(name)
-    ["#{JRUBY_DIR}/lib/ruby/gems/shared/gems", JRUBY_DIR, "#{JRUBY_DIR}/.."].each do |dir|
+    ["#{JRUBY_DIR}/lib/ruby/gems/shared/gems"].each do |dir|
       found = Dir.glob("#{dir}/#{name}*").first
+      return found if found
+    end
+    
+    [JRUBY_DIR, "#{JRUBY_DIR}/.."].each do |dir|
+      found = Dir.glob("#{dir}/#{name}").first
       return found if found
     end
     raise "Can't find the #{name} gem - gem install it in this repository, or put it in the repository directory or its parent"
@@ -208,24 +215,69 @@ module Utilities
   def self.jruby_version
     File.read("#{JRUBY_DIR}/VERSION").strip
   end
+  
+  def self.human_size(bytes)
+    if bytes < 1024
+      "#{bytes} B"
+    elsif bytes < 1000**2
+      "#{(bytes/1024.0).round(2)} KB"
+    elsif bytes < 1000**3
+      "#{(bytes/1024.0**2).round(2)} MB"
+    elsif bytes < 1000**4
+      "#{(bytes/1024.0**3).round(2)} GB"
+    else
+      "#{(bytes/1024.0**4).round(2)} TB"
+    end
+  end
+
+  def self.log(tty_message, full_message)
+    if STDERR.tty?
+      STDERR.print tty_message unless tty_message.nil?
+    else
+      STDERR.print full_message unless full_message.nil?
+    end
+  end
 
 end
 
 module ShellUtils
   private
 
-  def raw_sh(*args)
-    if args.last == :no_print_cmd
-      args.pop
-    else
-      puts "$ #{printable_cmd(args)}"
+  def system_timeout(timeout, *args)
+    begin
+      pid = Process.spawn(*args)
+    rescue SystemCallError
+      return nil
     end
+    
+    begin
+      Timeout.timeout timeout do
+        Process.waitpid pid
+        $?.exitstatus == 0
+      end
+    rescue Timeout::Error
+      Process.kill('TERM', pid)
+      nil
+    end
+  end
+
+  def raw_sh(*args)
     continue_on_failure = false
-    if args.last == :continue_on_failure
-      args.pop
+    if args.last.is_a?(Hash) && args.last.delete(:continue_on_failure)
       continue_on_failure = true
     end
-    result = system(*args)
+    if !args.last.is_a?(Hash) || !args.last.delete(:no_print_cmd)
+      puts "$ #{printable_cmd(args)}"
+    end
+    timeout = nil
+    if args.last.is_a?(Hash)
+      timeout = args.last.delete(:timeout)
+    end
+    if timeout
+      result = system_timeout(timeout, *args)
+    else
+      result = system(*args)
+    end
     if result
       true
     else
@@ -339,6 +391,9 @@ module Commands
     puts 'jt test integration TESTS                      runs the given integration tests'
     puts 'jt test gems                                   tests installing and using gems'
     puts 'jt test cexts                                  run C extension tests (set SULONG_DIR)'
+    puts 'jt test report :language                       build a report on language specs'
+    puts '               :core                               (results go into test/target/mspec-html-report)'
+    puts '               :library'
     puts 'jt tag spec/ruby/language                      tag failing specs in this directory'
     puts 'jt tag spec/ruby/language/while_spec.rb        tag failing specs in this file'
     puts 'jt tag all spec/ruby/language                  tag all specs in this file, without running them'
@@ -408,11 +463,16 @@ module Commands
 
   def run(*args)
     env_vars = args.first.is_a?(Hash) ? args.shift : {}
+    
     jruby_args = [
       '-X+T',
       "-Xtruffle.core.load_path=#{JRUBY_DIR}/truffle/src/main/ruby",
       '-Xtruffle.graal.warn_unless=false'
     ]
+    
+    if ENV['JRUBY_OPTS'] && ENV['JRUBY_OPTS'].include?('-X-T')
+      jruby_args.delete '-X+T'
+    end
 
     {
       '--asm' => '--graal',
@@ -449,6 +509,13 @@ module Commands
 
     if args.delete('--server')
       jruby_args += %w[-Xtruffle.instrumentation_server_port=8080]
+    end
+
+    if args.delete('--profile')
+      v = Utilities.truffle_version
+      jruby_args << "-J-Xbootclasspath/a:#{M2_REPO}/com/oracle/truffle/truffle-debug/#{v}/truffle-debug-#{v}.jar"
+      jruby_args << "-J-Dtruffle.profiling.enabled=true"
+      jruby_args << "-Xtruffle.profiler=true"
     end
 
     if args.delete('--igv')
@@ -491,6 +558,7 @@ module Commands
       test_cexts if ENV['SULONG_DIR']
     when 'compiler' then test_compiler(*rest)
     when 'cexts' then test_cexts(*rest)
+    when 'report' then test_report(*rest)
     when 'integration' then test_integration({}, *rest)
     when 'gems' then test_gems({}, *rest)
     when 'specs' then test_specs('run', *rest)
@@ -560,6 +628,12 @@ module Commands
     end
   ensure
     File.delete output_file rescue nil
+  end
+  private :test_cexts
+
+  def test_report(component)
+    test 'specs', '--truffle-formatter', component
+    sh 'ant', '-f', 'spec/truffle/buildTestReports.xml'
   end
   private :test_cexts
 
@@ -712,20 +786,26 @@ module Commands
     use_json = args.delete '--json'
     samples = []
     METRICS_REPS.times do
-      log '.', 'sampling'
+      Utilities.log '.', "sampling\n"
       r, w = IO.pipe
-      run '-Xtruffle.metrics.memory_used_on_exit=true', '-J-verbose:gc', *args, {err: w, out: w}, :no_print_cmd
+      run '-Xtruffle.metrics.memory_used_on_exit=true', '-J-verbose:gc', *args, {err: w, out: w, no_print_cmd: true}
       w.close
       samples.push memory_allocated(r.read)
       r.close
     end
-    log "\n", nil
-    mean = samples.inject(:+) / samples.size
-    error = samples.max - mean
+    Utilities.log "\n", nil
+    range = samples.max - samples.min
+    error = range / 2
+    median = samples.min + error
+    human_readable = "#{Utilities.human_size(median)} ± #{Utilities.human_size(error)}"
     if use_json
-      puts JSON.generate({mean: mean, error: error})
+      puts JSON.generate({
+        median: median,
+        error: error,
+        human: human_readable
+      })
     else
-      puts "#{human_size(mean)} ± #{human_size(error)}"
+      puts human_readable
     end
   end
 
@@ -746,20 +826,21 @@ module Commands
   end
 
   def metrics_minheap(*args)
+    use_json = args.delete '--json'
     heap = 10
-    log '>', "Trying #{heap} MB"
+    Utilities.log '>', "Trying #{heap} MB\n"
     until can_run_in_heap(heap, *args)
       heap += 10
-      log '>', "Trying #{heap} MB"
+      Utilities.log '>', "Trying #{heap} MB\n"
     end
     heap -= 9
     heap = 1 if heap == 0
     successful = 0
     loop do
       if successful > 0
-        log '?', "Verifying #{heap} MB"
+        Utilities.log '?', "Verifying #{heap} MB\n"
       else
-        log '+', "Trying #{heap} MB"
+        Utilities.log '+', "Trying #{heap} MB\n"
       end
       if can_run_in_heap(heap, *args)
         successful += 1
@@ -769,31 +850,53 @@ module Commands
         successful = 0
       end
     end
-    log "\n", nil
-    puts "#{heap} MB"
+    Utilities.log "\n", nil
+    human_readable = "#{heap} MB"
+    if use_json
+      puts JSON.generate({
+        min: heap,
+        human: human_readable
+      })
+    else
+      puts human_readable
+    end
   end
 
   def can_run_in_heap(heap, *command)
-    run("-J-Xmx#{heap}M", *command, {err: '/dev/null', out: '/dev/null'}, :continue_on_failure, :no_print_cmd)
+    run("-J-Xmx#{heap}M", *command, {err: '/dev/null', out: '/dev/null', no_print_cmd: true, continue_on_failure: true, timeout: 60})
   end
 
   def metrics_time(*args)
+    use_json = args.delete '--json'
     samples = []
     METRICS_REPS.times do
-      log '.', 'sampling'
+      Utilities.log '.', "sampling\n"
       r, w = IO.pipe
       start = Time.now
-      run '-Xtruffle.metrics.time=true', *args, {err: w, out: w}, :no_print_cmd
+      run '-Xtruffle.metrics.time=true', *args, {err: w, out: w, no_print_cmd: true}
       finish = Time.now
       w.close
       samples.push get_times(r.read, finish - start)
       r.close
     end
-    log "\n", nil
+    Utilities.log "\n", nil
+    results = {}
+    results['human'] = ''
     samples[0].each_key do |region|
       region_samples = samples.map { |s| s[region] }
       mean = region_samples.inject(:+) / samples.size
-      puts "#{region} #{mean.round(2)} s"
+      results[region] = mean
+      if use_json
+        file = STDERR
+      else
+        file = STDOUT
+      end
+      human = "#{region} #{mean.round(2)} s\n"
+      file.print human
+      results['human'] += human
+    end
+    if use_json
+      puts JSON.generate(Hash[results.map { |key, value| [key.strip, value] }])
     end
   end
 
@@ -821,22 +924,8 @@ module Commands
     end
     times[' jvm'] = total - times['  main']
     times['total'] = total
-    times['unaccounted'] = total - accounted_for
+    times['unaccounted'] = total - accounted_for if times['    load-core']
     times
-  end
-
-  def human_size(bytes)
-    if bytes < 1024
-      "#{bytes} B"
-    elsif bytes < 1000**2
-      "#{(bytes/1024.0).round(2)} KB"
-    elsif bytes < 1000**3
-      "#{(bytes/1024.0**2).round(2)} MB"
-    elsif bytes < 1000**4
-      "#{(bytes/1024.0**3).round(2)} GB"
-    else
-      "#{(bytes/1024.0**4).round(2)} TB"
-    end
   end
 
   def tarball(*options)
@@ -847,14 +936,6 @@ module Commands
     FileUtils.copy generated_file, final_file
     FileUtils.copy "#{generated_file}.sha256", "#{final_file}.sha256"
     sh 'test/truffle/tarball.sh', final_file
-  end
-
-  def log(tty_message, full_message)
-    if STDERR.tty?
-      STDERR.print tty_message unless tty_message.nil?
-    else
-      STDERR.puts full_message unless full_message.nil?
-    end
   end
 
   def benchmark(*args)

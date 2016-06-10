@@ -87,7 +87,7 @@ public class RopeOperations {
             case CR_VALID: return new ValidLeafRope(bytes, encoding, characterLength);
             case CR_BROKEN: return new InvalidLeafRope(bytes, encoding);
             default: {
-                CompilerDirectives.transferToInterpreter();
+                CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw new RuntimeException(String.format("Unknown code range type: %d", codeRange));
             }
         }
@@ -115,7 +115,12 @@ public class RopeOperations {
 
     @TruffleBoundary
     public static String decodeUTF8(Rope rope) {
-        return RubyEncoding.decodeUTF8(rope.getBytes(), 0, rope.byteLength());
+        return decodeUTF8(rope.getBytes(), 0, rope.byteLength());
+    }
+
+    @TruffleBoundary
+    public static String decodeUTF8(byte[] bytes, int offset, int byteLength) {
+        return RubyEncoding.decodeUTF8(bytes, offset, byteLength);
     }
 
     @TruffleBoundary

@@ -13,6 +13,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.DynamicObject;
 import jnr.constants.platform.Errno;
+import org.jcodings.Encoding;
 import org.jcodings.specific.UTF8Encoding;
 import org.jruby.runtime.Visibility;
 import org.jruby.truffle.Layouts;
@@ -460,9 +461,9 @@ public class CoreExceptions {
         final DynamicObject logicalClass = context.getCoreLibrary().getLogicalClass(receiver);
         final String moduleName = Layouts.MODULE.getFields(logicalClass).getName();
 
-        // e.g. BasicObject does not have to_s
-        final boolean hasToS = ModuleOperations.lookupMethod(logicalClass, "to_s", Visibility.PUBLIC) != null;
-        final Object stringRepresentation = hasToS ? context.send(receiver, "to_s", null) : context.getCoreLibrary().getNilObject();
+        // e.g. BasicObject does not have inspect
+        final boolean hasInspect = ModuleOperations.lookupMethod(logicalClass, "inspect", Visibility.PUBLIC) != null;
+        final Object stringRepresentation = hasInspect ? context.send(receiver, "inspect", null) : context.getCoreLibrary().getNilObject();
 
         return noMethodError(String.format("undefined method `%s' for %s:%s", name, stringRepresentation, moduleName), name, currentNode);
     }
@@ -632,7 +633,7 @@ public class CoreExceptions {
     // EncodingCompatibilityError
 
     @TruffleBoundary
-    public DynamicObject encodingCompatibilityErrorIncompatible(String a, String b, Node currentNode) {
+    public DynamicObject encodingCompatibilityErrorIncompatible(Encoding a, Encoding b, Node currentNode) {
         return encodingCompatibilityError(String.format("incompatible character encodings: %s and %s", a, b), currentNode);
     }
 
