@@ -17,7 +17,7 @@ import static org.jruby.RubyEnumerator.enumeratorizeWithSize;
 import static org.jruby.runtime.Helpers.arrayOf;
 
 /**
- * Created by headius on 5/28/16.
+ * One object version of RubyArraySpecialized.
  */
 public class RubyArrayOneObject extends RubyArraySpecialized {
     private IRubyObject value;
@@ -27,14 +27,13 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
         super(runtime, false);
         this.value = value;
         this.realLength = 1;
-        setFlag(Constants.PACKED_ARRAY_F, true);
     }
 
     public RubyArrayOneObject(RubyClass otherClass, IRubyObject value) {
+        // packed arrays are omitted from ObjectSpace
         super(otherClass, false);
         this.value = value;
         this.realLength = 1;
-        setFlag(Constants.PACKED_ARRAY_F, true);
     }
 
     RubyArrayOneObject(RubyArrayOneObject other) {
@@ -60,15 +59,8 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
     }
 
     @Override
-    protected void unpack() {
-        if (!packed()) return;
-        // CON: I believe most of the time we'll fail because we need to grow, so give a bit of extra room
-        IRubyObject nil = getRuntime().getNil();
-        values = new IRubyObject[]{nil, value, nil};
+    protected void finishUnpack(IRubyObject nil) {
         value = nil;
-        begin = 1;
-        realLength = 1;
-        setFlag(Constants.PACKED_ARRAY_F, false);
     }
 
     @Override
@@ -87,7 +79,6 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
         value = null;
         values = IRubyObject.NULL_ARRAY;
         realLength = 0;
-        setFlag(Constants.PACKED_ARRAY_F, false);
 
         return this;
     }
@@ -146,7 +137,7 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
         modifyCheck();
 
         // See [ruby-core:17483]
-        if (len < 0) return this;
+        if (len <= 0) return this;
 
         if (len > Integer.MAX_VALUE - beg) throw context.runtime.newArgumentError("argument too big");
 
@@ -167,7 +158,7 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
         modifyCheck();
 
         // See [ruby-core:17483]
-        if (len < 0) return this;
+        if (len <= 0) return this;
 
         if (len > Integer.MAX_VALUE - beg) throw context.runtime.newArgumentError("argument too big");
 
@@ -279,9 +270,8 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
     public IRubyObject store(long index, IRubyObject value) {
         if (!packed()) return super.store(index, value);
 
-        if (index == 1) {
-            eltSetOk(index, value);
-            return value;
+        if (index == 0) {
+            return this.value = value;
         }
 
         unpack();
@@ -291,10 +281,14 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
     @Override
     public IRubyObject subseq(RubyClass metaClass, long beg, long len, boolean light) {
         if (!packed()) return super.subseq(metaClass, beg, len, light);
+
+        if (len == 0) return newEmptyArray(metaClass.getClassRuntime());
+
         if (beg != 0 || len != 1) {
             unpack();
             return super.subseq(metaClass, beg, len, light);
         }
+
         return new RubyArrayOneObject(metaClass, this);
     }
 
@@ -310,13 +304,5 @@ public class RubyArrayOneObject extends RubyArraySpecialized {
         if (!packed()) return super.uniq(context);
 
         return new RubyArrayOneObject(this);
-    }
-
-    @Override
-    @Deprecated
-    public void ensureCapacity(int minCapacity) {
-        if (minCapacity == 1) return;
-        unpack();
-        super.ensureCapacity(minCapacity);
     }
 }
