@@ -443,6 +443,9 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
     *
     */
     private RubyArray makeShared() {
+        // TODO: (CON) Some calls to makeShared could create packed array almost as efficiently
+        unpack();
+
         return makeShared(begin, realLength, getMetaClass());
     }
 
@@ -2898,6 +2901,7 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
 
     // MRI array.c flatten
     protected boolean flatten(ThreadContext context, final int level, final RubyArray result) {
+        // TODO: (CON) We can flatten packed versions efficiently if length does not change (e.g. [[1,2],[]])
         unpack();
         final Ruby runtime = context.runtime;
         RubyArray stack = newArrayLight(runtime, ARRAY_DEFAULT_SIZE);
@@ -3151,6 +3155,9 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
         RubyHash hash = makeHash();
         if (realLength == hash.size()) return context.runtime.getNil();
 
+        // TODO: (CON) This could be a no-op for packed arrays if size does not change
+        unpack();
+
         int j = 0;
         for (int i = 0; i < realLength; i++) {
             IRubyObject v = elt(i);
@@ -3167,6 +3174,10 @@ public class RubyArray extends RubyObject implements List, RandomAccess {
         if (!block.isGiven()) return uniq_bang(context);
         RubyHash hash = makeHash(context, block);
         if (realLength == hash.size()) return context.runtime.getNil();
+
+        // TODO: (CON) This could be a no-op for packed arrays if size does not change
+        unpack();
+
         realLength = 0;
 
         hash.visitAll(new RubyHash.Visitor() {
